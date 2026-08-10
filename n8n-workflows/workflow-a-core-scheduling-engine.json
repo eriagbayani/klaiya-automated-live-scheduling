@@ -1,0 +1,669 @@
+{
+  "name": "Klaiya A - Core Scheduling Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 4"
+            }
+          ]
+        }
+      },
+      "id": "klaiya-node-001",
+      "name": "Weekly Trigger (Thu 10:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Next Monday 00:00 -> next Sunday, as ISO dates.\nconst now = new Date();\nconst day = now.getDay();                 // 0=Sun\nconst daysToNextMon = ((8 - day) % 7) || 7;\nconst monday = new Date(now);\nmonday.setDate(now.getDate() + daysToNextMon);\nconst sunday = new Date(monday);\nsunday.setDate(monday.getDate() + 6);\n\n// fairness lookback\nconst histStart = new Date(now);\nhistStart.setDate(now.getDate() - 28);\n\nconst iso = (d) => d.toISOString().slice(0, 10);\n\nreturn [{ json: {\n  weekStart: iso(monday),\n  weekEnd: iso(sunday),\n  historyStart: iso(histStart),\n  historyEnd: iso(now),\n}}];"
+      },
+      "id": "klaiya-node-002",
+      "name": "Compute Week Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SESSIONS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND(DATETIME_FORMAT({Date}, 'YYYY-MM-DD') >= '{{ $json.weekStart }}', DATETIME_FORMAT({Date}, 'YYYY-MM-DD') <= '{{ $json.weekEnd }}', {Status} = 'Draft')",
+        "options": {}
+      },
+      "id": "klaiya-node-003",
+      "name": "Get Sessions",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -20,
+        400
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_STAFF_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "={Active} = 1",
+        "options": {}
+      },
+      "id": "klaiya-node-004",
+      "name": "Get Staff",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        200,
+        400
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AVAILABILITY_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND(DATETIME_FORMAT({Date}, 'YYYY-MM-DD') >= '{{ $('Compute Week Window').first().json.weekStart }}', DATETIME_FORMAT({Date}, 'YYYY-MM-DD') <= '{{ $('Compute Week Window').first().json.weekEnd }}')",
+        "options": {}
+      },
+      "id": "klaiya-node-005",
+      "name": "Get Availability",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        420,
+        400
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ABSENCES_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND(DATETIME_FORMAT({Date}, 'YYYY-MM-DD') >= '{{ $('Compute Week Window').first().json.weekStart }}', DATETIME_FORMAT({Date}, 'YYYY-MM-DD') <= '{{ $('Compute Week Window').first().json.weekEnd }}')",
+        "options": {}
+      },
+      "id": "klaiya-node-006",
+      "name": "Get Absences",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        640,
+        400
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND({Session Date Flat} >= '{{ $('Compute Week Window').first().json.historyStart }}', {Session Date Flat} <= '{{ $('Compute Week Window').first().json.historyEnd }}', {Status} != 'Cancelled')",
+        "options": {}
+      },
+      "id": "klaiya-node-007",
+      "name": "Get History (28d)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        860,
+        400
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Reshape five Airtable result sets into the engine's input contract.\n// The Airtable node returns either { id, fields:{...} } or a flattened\n// { id, ...fieldValues } depending on node version. Normalise both shapes.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst rows = (n) => { try { return $(n).all().map(i => REC(i.json)).filter(r => r && r.id); } catch (e) { return []; } };\nconst one  = (v) => Array.isArray(v) ? v[0] : v;\n\nreturn [{ json: {\n  sessions: rows('Get Sessions').map(r => ({\n    id: r.id,\n    date: r.fields['Date'],\n    startTime: r.fields['Start Time'],\n    endTime: r.fields['End Time'],\n    clientId: one(r.fields['Client']),\n    clientName: one(r.fields['Client Name']) || 'Unknown',\n    clientTier: one(r.fields['Brand Tier']) || 'C',\n    requiresCertification: Boolean(one(r.fields['Requires Certification'])),\n    hostsRequired: r.fields['Hosts Required'] || 0,\n    adminsRequired: r.fields['Admins Required'] || 0,\n  })),\n  staff: rows('Get Staff').map(r => ({\n    id: r.id,\n    name: r.fields['Name'],\n    role: r.fields['Role'],\n    active: Boolean(r.fields['Active']),\n    certifiedClients: r.fields['Certified Clients'] || [],\n    maxSessionsPerWeek: r.fields['Max Sessions Per Week'] || 99,\n    notifyChannel: r.fields['Notify Channel'] || 'Email',\n  })),\n  availability: rows('Get Availability').map(r => ({\n    staffId: one(r.fields['Staff']),\n    date: r.fields['Date'],\n    availableFrom: r.fields['Available From'],\n    availableTo: r.fields['Available To'],\n  })),\n  absences: rows('Get Absences').map(r => ({\n    staffId: one(r.fields['Staff']),\n    date: r.fields['Date'],\n    startTime: r.fields['Start Time'],\n    endTime: r.fields['End Time'],\n  })),\n  history: rows('Get History (28d)').map(r => ({\n    staffId: one(r.fields['Staff']),\n    date: one(r.fields['Session Date']),\n    startTime: one(r.fields['Session Start']),\n    endTime: one(r.fields['Session End']),\n    weight: r.fields['Weight'] || 1,\n  })),\n}}];"
+      },
+      "id": "klaiya-node-008",
+      "name": "Normalise Inputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ============================================================\n// KLAIYA SCHEDULING ENGINE - deterministic assignment\n// Mode: Run Once for All Items\n// ============================================================\nconst input        = $input.first().json;\nconst sessions     = input.sessions     || [];\nconst staff        = input.staff        || [];\nconst availability = input.availability || [];\nconst absences     = input.absences     || [];\nconst history      = input.history      || [];\n\nconst CONFIG = {\n  primeStart: '18:00',\n  primeEnd: '22:00',\n  primeMultiplier: 1.5,\n  tierMultiplier: { A: 1.4, B: 1.2, C: 1.0 },\n  bufferMinutes: 30,\n};\n\nconst toMin = (t) => {\n  const [h, m] = String(t || '0:0').split(':').map(Number);\n  return (h * 60) + m;\n};\nconst overlaps = (aS, aE, bS, bE, buf = 0) =>\n  toMin(aS) < toMin(bE) + buf && toMin(bS) < toMin(aE) + buf;\nconst contains = (oS, oE, iS, iE) =>\n  toMin(oS) <= toMin(iS) && toMin(oE) >= toMin(iE);\nconst daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000);\nconst stableHash = (s) => {\n  let h = 0;\n  const str = String(s);\n  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;\n  return Math.abs(h);\n};\n\nconst sessionWeight = (s) => {\n  const prime = toMin(s.startTime) >= toMin(CONFIG.primeStart)\n             && toMin(s.startTime) <  toMin(CONFIG.primeEnd);\n  return 1.0 * (prime ? CONFIG.primeMultiplier : 1.0)\n             * (CONFIG.tierMultiplier[s.clientTier || 'C'] || 1.0);\n};\n\nconst availByStaff = {}, absenceByStaff = {}, historyByStaff = {};\nfor (const a of availability) (availByStaff[a.staffId] = availByStaff[a.staffId] || []).push(a);\nfor (const a of absences)     (absenceByStaff[a.staffId] = absenceByStaff[a.staffId] || []).push(a);\nfor (const h of history)      (historyByStaff[h.staffId] = historyByStaff[h.staffId] || []).push(h);\n\nconst ledger = {};\nfor (const s of staff) {\n  const hist = historyByStaff[s.id] || [];\n  ledger[s.id] = {\n    weightedLoad: hist.reduce((sum, h) => sum + (Number(h.weight) || 1), 0),\n    availableCount: (availByStaff[s.id] || []).length,\n    weekCount: 0,\n    lastShiftDate: hist.length ? hist.map(h => h.date).filter(Boolean).sort().slice(-1)[0] : null,\n    booked: hist.map(h => ({ date: h.date, start: h.startTime, end: h.endTime })),\n  };\n}\n\nconst fairnessScore = (sid) => {\n  const L = ledger[sid];\n  return (L.weightedLoad + 1) / (L.availableCount + 1);\n};\n\n// returns null if eligible, else a reason string\nconst isEligible = (p, session, role) => {\n  if (!p.active) return 'inactive';\n  if (p.role !== role && p.role !== 'Both') return 'role';\n  if (session.requiresCertification && !(p.certifiedClients || []).includes(session.clientId))\n    return 'not-certified';\n\n  const avail = (availByStaff[p.id] || []).filter(a => a.date === session.date);\n  if (!avail.some(a => contains(a.availableFrom, a.availableTo, session.startTime, session.endTime)))\n    return 'unavailable';\n\n  if ((absenceByStaff[p.id] || []).some(a => a.date === session.date &&\n      overlaps(a.startTime || '00:00', a.endTime || '23:59', session.startTime, session.endTime)))\n    return 'absent';\n\n  if (ledger[p.id].booked.some(b => b.date === session.date &&\n      overlaps(b.start, b.end, session.startTime, session.endTime, CONFIG.bufferMinutes)))\n    return 'conflict';\n\n  if (ledger[p.id].weekCount >= (p.maxSessionsPerWeek || 99)) return 'at-cap';\n  return null;\n};\n\nconst eligibleFor = (session, role, exclude = []) =>\n  staff.filter(p => !exclude.includes(p.id) && isEligible(p, session, role) === null);\n\n// build slot list\nconst slots = [];\nfor (const s of sessions) {\n  for (let i = 0; i < (s.hostsRequired  || 0); i++) slots.push({ session: s, role: 'Live Host' });\n  for (let i = 0; i < (s.adminsRequired || 0); i++) slots.push({ session: s, role: 'Live Admin' });\n}\n\n// SCARCITY FIRST - hardest-to-fill slots get first pick of the pool\nslots.sort((a, b) =>\n  eligibleFor(a.session, a.role).length - eligibleFor(b.session, b.role).length);\n\nconst assignments = [], gaps = [], perSession = {};\nlet conflictsPrevented = 0;\n\nfor (const slot of slots) {\n  const { session, role } = slot;\n  const already = perSession[session.id] || [];\n\n  // count how many people were blocked purely by a time conflict - this is the\n  // \"double-booking prevented\" number for the before/after slide\n  conflictsPrevented += staff.filter(p =>\n    !already.includes(p.id) && isEligible(p, session, role) === 'conflict').length;\n\n  const candidates = eligibleFor(session, role, already);\n\n  if (candidates.length === 0) {\n    const reasons = {};\n    for (const p of staff) {\n      const r = isEligible(p, session, role);\n      if (r) reasons[r] = (reasons[r] || 0) + 1;\n    }\n    gaps.push({\n      sessionId: session.id,\n      date: session.date,\n      startTime: session.startTime,\n      endTime: session.endTime,\n      client: session.clientName,\n      role,\n      reasonBreakdown: reasons,\n    });\n    continue;\n  }\n\n  candidates.sort((a, b) => {\n    const fa = fairnessScore(a.id), fb = fairnessScore(b.id);\n    if (fa !== fb) return fa - fb;\n    const da = ledger[a.id].lastShiftDate ? daysBetween(session.date, ledger[a.id].lastShiftDate) : 9999;\n    const db = ledger[b.id].lastShiftDate ? daysBetween(session.date, ledger[b.id].lastShiftDate) : 9999;\n    if (da !== db) return db - da;\n    return stableHash(a.id) - stableHash(b.id);\n  });\n\n  const chosen = candidates[0];\n  const weight = sessionWeight(session);\n\n  assignments.push({\n    sessionId: session.id,\n    staffId: chosen.id,\n    staffName: chosen.name,\n    role, weight,\n    date: session.date,\n    startTime: session.startTime,\n    endTime: session.endTime,\n    client: session.clientName,\n    fairnessScoreAtAssignment: Number(fairnessScore(chosen.id).toFixed(3)),\n  });\n\n  const L = ledger[chosen.id];\n  L.weightedLoad += weight;\n  L.weekCount += 1;\n  L.lastShiftDate = session.date;\n  L.booked.push({ date: session.date, start: session.startTime, end: session.endTime });\n  (perSession[session.id] = perSession[session.id] || []).push(chosen.id);\n}\n\nconst loads = staff.filter(s => s.active).map(s => ledger[s.id].weightedLoad);\nconst mean = loads.reduce((a, b) => a + b, 0) / (loads.length || 1);\nconst stdev = Math.sqrt(loads.reduce((s, l) => s + Math.pow(l - mean, 2), 0) / (loads.length || 1));\n\nreturn [{ json: {\n  assignments, gaps,\n  stats: {\n    slotsTotal: slots.length,\n    slotsFilled: assignments.length,\n    slotsUnfilled: gaps.length,\n    coveragePct: slots.length ? Number(((assignments.length / slots.length) * 100).toFixed(1)) : 100,\n    conflictsPrevented,\n    loadMean: Number(mean.toFixed(2)),\n    loadStdev: Number(stdev.toFixed(2)),\n    staffCount: staff.filter(s => s.active).length,\n    generatedAt: new Date().toISOString(),\n  },\n}}];"
+      },
+      "id": "klaiya-node-009",
+      "name": "Assignment Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One item per assignment, keys = exact Airtable field names\n// so the Airtable node can auto-map input data.\nconst { assignments } = $input.first().json;\nreturn assignments.map(a => ({ json: {\n  'Session': [a.sessionId],\n  'Staff': [a.staffId],\n  'Role': a.role,\n  'Status': 'Draft',\n  'Assigned By': 'Auto',\n  'Approved': false,\n  'Notified': false,\n  'Weight': a.weight,\n  'Fairness Score At Assignment': a.fairnessScoreAtAssignment,\n}}));"
+      },
+      "id": "klaiya-node-010",
+      "name": "Shape Assignments for Airtable",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-011",
+      "name": "Create Draft Assignments",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        220
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-11",
+              "leftValue": "={{ $json.gaps.length }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-012",
+      "name": "Has Coverage Gaps?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"llama-3.3-70b-versatile\", temperature: 0.2, messages: [ { role: \"system\", content: \"You brief a scheduling manager on staffing gaps at a livestream commerce agency. Be concise and factual. Group gaps by client, then by date. For each, state the role missing and the single most common blocking reason. End with one line naming the tightest constraint overall. Max 200 words. Plain text, no markdown headers.\" }, { role: \"user\", content: JSON.stringify($json.gaps) } ] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "klaiya-node-013",
+      "name": "Groq - Summarise Gaps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CRED_ID",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Groq node runs with onError=continueRegularOutput, so check for a usable body.\nconst r = $input.first().json;\nconst engine = $('Assignment Engine').first().json;\nconst s = engine.stats;\n\nlet summary;\nif (r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) {\n  summary = r.choices[0].message.content;\n} else {\n  // static fallback - never block on a Groq failure\n  summary = engine.gaps.map(g =>\n    `- ${g.client} ${g.date} ${g.startTime}-${g.endTime}: no ${g.role} available`\n  ).join('\\n');\n}\n\nconst text = [\n  '<b>Draft schedule ready for review</b>',\n  `Coverage: ${s.slotsFilled}/${s.slotsTotal} slots (${s.coveragePct}%)`,\n  `Double-bookings prevented: ${s.conflictsPrevented}`,\n  `Load spread (stdev): ${s.loadStdev} across ${s.staffCount} staff`,\n  '',\n  `<b>${engine.gaps.length} gap(s) need attention:</b>`,\n  summary,\n  '',\n  'Review and tick Approved in the Scheduler Review view. Nothing is sent to staff until you do.',\n].join('\\n');\n\nreturn [{ json: { text, source: (r && r.choices) ? 'groq' : 'fallback' } }];"
+      },
+      "id": "klaiya-node-014",
+      "name": "Gap Summary + Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $('Assignment Engine').first().json.stats;\nreturn [{ json: { text: [\n  '<b>Draft schedule ready for review</b>',\n  `Coverage: ${s.slotsFilled}/${s.slotsTotal} slots (100%) - no gaps.`,\n  `Double-bookings prevented: ${s.conflictsPrevented}`,\n  `Load spread (stdev): ${s.loadStdev} across ${s.staffCount} staff`,\n  '',\n  'Review and tick Approved in the Scheduler Review view.',\n].join('\\n') }}];"
+      },
+      "id": "klaiya-node-015",
+      "name": "No Gaps Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_SCHEDULER_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-016",
+      "name": "Notify Scheduler",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2180,
+        560
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $('Assignment Engine').first().json.stats;\nreturn [{ json: {\n  'Action': 'DRAFT_GENERATED',\n  'Actor': 'Workflow A',\n  'Source': 'Automated',\n  'After Value': JSON.stringify(s),\n  'Reason': `Weekly draft for ${$('Compute Week Window').first().json.weekStart} to ${$('Compute Week Window').first().json.weekEnd}`,\n}}];"
+      },
+      "id": "klaiya-node-017",
+      "name": "Shape Audit Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AUDIT_LOG_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-018",
+      "name": "Audit - Draft Generated",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        2620,
+        560
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly Trigger (Thu 10:00)": {
+      "main": [
+        [
+          {
+            "node": "Compute Week Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Week Window": {
+      "main": [
+        [
+          {
+            "node": "Get Sessions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sessions": {
+      "main": [
+        [
+          {
+            "node": "Get Staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Staff": {
+      "main": [
+        [
+          {
+            "node": "Get Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Availability": {
+      "main": [
+        [
+          {
+            "node": "Get Absences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Absences": {
+      "main": [
+        [
+          {
+            "node": "Get History (28d)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get History (28d)": {
+      "main": [
+        [
+          {
+            "node": "Normalise Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Inputs": {
+      "main": [
+        [
+          {
+            "node": "Assignment Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assignment Engine": {
+      "main": [
+        [
+          {
+            "node": "Shape Assignments for Airtable",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Has Coverage Gaps?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Assignments for Airtable": {
+      "main": [
+        [
+          {
+            "node": "Create Draft Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Coverage Gaps?": {
+      "main": [
+        [
+          {
+            "node": "Groq - Summarise Gaps",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Gaps Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Summarise Gaps": {
+      "main": [
+        [
+          {
+            "node": "Gap Summary + Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gap Summary + Fallback": {
+      "main": [
+        [
+          {
+            "node": "Notify Scheduler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Gaps Message": {
+      "main": [
+        [
+          {
+            "node": "Notify Scheduler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Scheduler": {
+      "main": [
+        [
+          {
+            "node": "Shape Audit Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Audit Row": {
+      "main": [
+        [
+          {
+            "node": "Audit - Draft Generated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "klaiya-poc"
+  },
+  "tags": [
+    {
+      "name": "Klaiya Scheduling"
+    }
+  ]
+}

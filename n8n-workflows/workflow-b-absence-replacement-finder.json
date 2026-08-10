@@ -1,0 +1,1091 @@
+{
+  "name": "Klaiya B - Absence Replacement Finder",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "klaiya-node-101",
+      "name": "Absence Message (Telegram)",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -460,
+        400
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"llama-3.3-70b-versatile\", temperature: 0, response_format: { type: \"json_object\" }, messages: [ { role: \"system\", content: \"You extract structured absence data from staff messages at a livestream commerce agency in Manila (Asia/Manila). Return ONLY a JSON object with these exact keys: {\\\"staffName\\\": string|null, \\\"date\\\": \\\"YYYY-MM-DD\\\"|null, \\\"startTime\\\": \\\"HH:MM\\\"|null, \\\"endTime\\\": \\\"HH:MM\\\"|null, \\\"reason\\\": string|null, \\\"isFullDay\\\": boolean, \\\"confidence\\\": number}. Rules: resolve relative dates (\\\"tomorrow\\\", \\\"tonight\\\", \\\"Friday\\\") against the reference date given by the user. Use 24-hour zero-padded times (\\\"7pm\\\" -> \\\"19:00\\\"). If the whole day is implied, isFullDay=true and both times null. confidence is 0.0-1.0 for how certain you are of the date and time; below 0.7 means a human should check. Never invent a date - if none can be determined, date=null and confidence<=0.3.\" }, { role: \"user\", content: \"Reference date (today): \" + $now.format(\"yyyy-MM-dd\") + \"\\nMessage: \" + $json.message.text } ] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "klaiya-node-102",
+      "name": "Groq - Parse Absence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -240,
+        400
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CRED_ID",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Guard against Groq failure or low-confidence output.\nconst r = $input.first().json;\nconst original = $('Absence Message (Telegram)').first().json;\n\nlet parsed = null;\ntry {\n  parsed = JSON.parse(r.choices[0].message.content);\n} catch (e) {\n  parsed = null;\n}\n\nconst valid = parsed\n  && typeof parsed.date === 'string'\n  && /^\\d{4}-\\d{2}-\\d{2}$/.test(parsed.date)\n  && Number(parsed.confidence) >= 0.7;\n\nreturn [{ json: {\n  needsHumanReview: !valid,\n  staffName: parsed ? parsed.staffName : null,\n  date: parsed ? parsed.date : null,\n  startTime: (parsed && parsed.startTime) || '00:00',\n  endTime: (parsed && parsed.endTime) || '23:59',\n  reason: (parsed && parsed.reason) || 'Not stated',\n  isFullDay: parsed ? Boolean(parsed.isFullDay) : true,\n  confidence: parsed ? Number(parsed.confidence) : 0,\n  rawMessage: original.message.text,\n  chatId: original.message.chat.id,\n  parseSource: parsed ? 'groq' : 'failed',\n}}];"
+      },
+      "id": "klaiya-node-103",
+      "name": "Validate Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-103",
+              "leftValue": "={{ $json.needsHumanReview }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-104",
+      "name": "Parsed Confidently?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_STAFF_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "={Telegram Chat ID} = '{{ $json.chatId }}'",
+        "options": {}
+      },
+      "id": "klaiya-node-105",
+      "name": "Find Staff",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        420,
+        300
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-105",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-106",
+      "name": "Staff Recognised?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        530,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Absence Message (Telegram)').first().json.message.chat.id }}",
+        "text": "=I do not recognise this account. Ask the scheduler to add your Telegram Chat ID to your staff record, then try again.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-107",
+      "name": "Reply - Unknown Sender",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        530,
+        520
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND({Staff Name Flat} = '{{ $('Validate Parse').first().json.staffName }}', {Session Date Flat} = '{{ $('Validate Parse').first().json.date }}', {Status} = 'Published')",
+        "options": {}
+      },
+      "id": "klaiya-node-108",
+      "name": "Find Affected Assignments",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        640,
+        300
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-108",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-109",
+      "name": "Any Shift Affected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $('Validate Parse').first().json;\nconst staffRec = $('Find Staff').first().json;\nreturn [{ json: {\n  'Staff': [staffRec.id],\n  'Date': p.date,\n  'Start Time': p.isFullDay ? '' : p.startTime,\n  'End Time': p.isFullDay ? '' : p.endTime,\n  'Reason': p.reason,\n  'Status': 'Open',\n  'Raw Message': p.rawMessage,\n  'Parse Confidence': p.confidence,\n}}];"
+      },
+      "id": "klaiya-node-110",
+      "name": "Shape Absence Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ABSENCES_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-111",
+      "name": "Log Absence",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1300,
+        220
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_STAFF_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "={Active} = 1",
+        "options": {}
+      },
+      "id": "klaiya-node-112",
+      "name": "Get Candidate Staff",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1520,
+        220
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AVAILABILITY_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=DATETIME_FORMAT({Date}, 'YYYY-MM-DD') = '{{ $('Validate Parse').first().json.date }}'",
+        "options": {}
+      },
+      "id": "klaiya-node-113",
+      "name": "Get Availability (Date)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1740,
+        220
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND({Session Date Flat} = '{{ $('Validate Parse').first().json.date }}', {Status} != 'Cancelled')",
+        "options": {}
+      },
+      "id": "klaiya-node-114",
+      "name": "Get Assignments (Date)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        220
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Single-slot version of the Workflow A engine.\n// Same hard constraints, same fairness ranking - so absences do not quietly\n// undo fair allocation the way a first-responder group chat does.\nconst one = (v) => Array.isArray(v) ? v[0] : v;\n// The Airtable node returns either { id, fields:{...} } or a flattened\n// { id, ...fieldValues } depending on node version. Normalise both shapes.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst rows = (n) => { try { return $(n).all().map(i => REC(i.json)).filter(r => r && r.id); } catch (e) { return []; } };\n\nconst p        = $('Validate Parse').first().json;\n// All seeded staff share one Telegram Chat ID during testing, so the sender\n// lookup can return several rows. Prefer the one whose name Groq extracted;\n// in production each staff member has a unique chat id and this picks the only match.\nconst senders  = rows('Find Staff');\nconst absentEl = senders.find(x => (x.fields['Name'] || '') === p.staffName) || senders[0] || REC($('Find Staff').first().json);\nconst slot     = REC($('Find Affected Assignments').first().json);\n\nconst need = {\n  date:      one(slot.fields['Session Date']),\n  startTime: one(slot.fields['Session Start']),\n  endTime:   one(slot.fields['Session End']),\n  client:    one(slot.fields['Session Client']),\n  role:      slot.fields['Role'],\n  sessionId: one(slot.fields['Session']),\n};\n\nconst toMin = (t) => { const [h, m] = String(t || '0:0').split(':').map(Number); return h * 60 + m; };\nconst overlaps = (aS, aE, bS, bE, buf = 0) => toMin(aS) < toMin(bE) + buf && toMin(bS) < toMin(aE) + buf;\nconst contains = (oS, oE, iS, iE) => toMin(oS) <= toMin(iS) && toMin(oE) >= toMin(iE);\n\nconst staff = rows('Get Candidate Staff').map(r => ({\n  id: r.id, name: r.fields['Name'], role: r.fields['Role'],\n  active: Boolean(r.fields['Active']),\n  certifiedClients: r.fields['Certified Clients'] || [],\n  notifyChannel: r.fields['Notify Channel'] || 'Email',\n}));\nconst avail = rows('Get Availability (Date)').map(r => ({\n  staffId: one(r.fields['Staff']),\n  from: r.fields['Available From'], to: r.fields['Available To'],\n}));\nconst booked = rows('Get Assignments (Date)').map(r => ({\n  staffId: one(r.fields['Staff']),\n  start: one(r.fields['Session Start']), end: one(r.fields['Session End']),\n  weight: r.fields['Weight'] || 1,\n}));\n\nconst loadByStaff = {};\nfor (const b of booked) loadByStaff[b.staffId] = (loadByStaff[b.staffId] || 0) + Number(b.weight);\n\nconst check = (person) => {\n  if (person.id === absentEl.id) return 'is-the-absent-person';\n  if (!person.active) return 'inactive';\n  if (person.role !== need.role && person.role !== 'Both') return 'wrong-role';\n  const covered = avail.filter(a => a.staffId === person.id)\n    .some(a => contains(a.from, a.to, need.startTime, need.endTime));\n  if (!covered) return 'not-available';\n  const clash = booked.filter(b => b.staffId === person.id)\n    .some(b => overlaps(b.start, b.end, need.startTime, need.endTime, 30));\n  if (clash) return 'already-booked';\n  return null;\n};\n\nconst eligible = staff.filter(p2 => check(p2) === null);\n\n// nearest misses: failed exactly one soft-ish constraint - gives the scheduler\n// something actionable instead of \"no match found\"\nconst nearestMisses = staff\n  .map(p2 => ({ name: p2.name, blockedBy: check(p2) }))\n  .filter(x => ['not-available', 'already-booked', 'wrong-role'].includes(x.blockedBy))\n  .slice(0, 5);\n\neligible.sort((a, b) => (loadByStaff[a.id] || 0) - (loadByStaff[b.id] || 0));\nconst replacement = eligible[0] || null;\n\nreturn [{ json: {\n  replacement,\n  found: Boolean(replacement),\n  nearestMisses,\n  need,\n  originalAssignmentId: slot.id,\n  absentStaffName: absentEl.fields['Name'],\n  absentStaffId: absentEl.id,\n  reason: p.reason,\n}}];"
+      },
+      "id": "klaiya-node-115",
+      "name": "Replacement Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-115",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-116",
+      "name": "Replacement Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: {\n  'Session': [d.need.sessionId],\n  'Staff': [d.replacement.id],\n  'Role': d.need.role,\n  'Status': 'Published',\n  'Assigned By': 'Replacement',\n  'Approved': true,\n  'Notified': false,\n}}];"
+      },
+      "id": "klaiya-node-117",
+      "name": "Shape Replacement Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-118",
+      "name": "Create Replacement Assignment",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        2840,
+        120
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: {\n  id: $('Replacement Engine').first().json.originalAssignmentId,\n  fields: { 'Status': 'Replaced' },\n}}];"
+      },
+      "id": "klaiya-node-119",
+      "name": "Shape Original As Replaced",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3060,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://api.airtable.com/v0/REPLACE_WITH_BASE_ID/REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ records: [ { id: $json.id, fields: $json.fields } ], typecast: true }) }}",
+        "options": {}
+      },
+      "id": "klaiya-node-120",
+      "name": "Mark Original Replaced",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3280,
+        120
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: {\n  assignmentIds: [$('Create Replacement Assignment').first().json.id],\n  changeType: 'CHANGE',\n} }];"
+      },
+      "id": "klaiya-node-121",
+      "name": "Shape Notify Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3500,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_C_ID",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "klaiya-node-122",
+      "name": "Call Workflow C (Notify)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3720,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"llama-3.3-70b-versatile\", temperature: 0.3, messages: [ { role: \"system\", content: \"You alert a scheduling manager that a staff absence has no automatic replacement. State: who is out, which session is now uncovered, and the nearest-miss candidates with the one constraint each failed. Be direct - this is time-sensitive. Max 120 words. Plain text.\" }, { role: \"user\", content: \"Absent: \" + $json.absentStaffName + \"\\nSession: \" + $json.need.client + \" \" + $json.need.date + \" \" + $json.need.startTime + \"-\" + $json.need.endTime + \"\\nRole needed: \" + $json.need.role + \"\\nNearest misses: \" + JSON.stringify($json.nearestMisses) } ] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "klaiya-node-123",
+      "name": "Groq - Escalation Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2620,
+        340
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CRED_ID",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = $('Replacement Engine').first().json;\n\nlet body;\nif (r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) {\n  body = r.choices[0].message.content;\n} else {\n  body = [\n    `${d.absentStaffName} is out for ${d.need.client} on ${d.need.date} ${d.need.startTime}-${d.need.endTime} (${d.need.role}).`,\n    'No qualified and available replacement found.',\n    'Nearest misses: ' + d.nearestMisses.map(m => `${m.name} (${m.blockedBy})`).join(', '),\n  ].join('\\n');\n}\n\nreturn [{ json: { text: '<b>UNCOVERED SESSION - action needed</b>\\n' + body } }];"
+      },
+      "id": "klaiya-node-124",
+      "name": "Escalation + Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_SCHEDULER_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-125",
+      "name": "Escalate to Scheduler",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3060,
+        340
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=I couldn't read that clearly. Please reply in this format:\n<b>OFF [date] [time range] [reason]</b>\nExample: OFF 2026-08-14 19:00-21:00 sick",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-126",
+      "name": "Ask For Clarification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        420,
+        520
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Validate Parse').first().json.chatId }}",
+        "text": "=Thanks - noted. I couldn't find a published shift for you on {{ $('Validate Parse').first().json.date }}, so there's nothing to backfill. If that's wrong, message the scheduler directly.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-127",
+      "name": "Reply - No Shift Found",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1080,
+        400
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $('Replacement Engine').first().json;\nconst found = d.found;\nreturn [{ json: {\n  'Action': found ? 'ABSENCE_REPLACED' : 'ABSENCE_ESCALATED',\n  'Actor': 'Workflow B',\n  'Source': 'Automated',\n  'Staff Affected': [d.absentStaffId],\n  'Before Value': `${d.absentStaffName} assigned to ${d.need.client} ${d.need.date} ${d.need.startTime}-${d.need.endTime}`,\n  'After Value': found\n    ? `Replaced by ${d.replacement.name}`\n    : 'UNCOVERED - escalated to scheduler',\n  'Reason': d.reason,\n}}];"
+      },
+      "id": "klaiya-node-128",
+      "name": "Shape Audit - Absence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3280,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AUDIT_LOG_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-129",
+      "name": "Audit - Absence Outcome",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        3500,
+        340
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Absence Message (Telegram)": {
+      "main": [
+        [
+          {
+            "node": "Groq - Parse Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Parse Absence": {
+      "main": [
+        [
+          {
+            "node": "Validate Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Parse": {
+      "main": [
+        [
+          {
+            "node": "Parsed Confidently?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsed Confidently?": {
+      "main": [
+        [
+          {
+            "node": "Find Staff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask For Clarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Staff": {
+      "main": [
+        [
+          {
+            "node": "Staff Recognised?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Staff Recognised?": {
+      "main": [
+        [
+          {
+            "node": "Find Affected Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply - Unknown Sender",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Affected Assignments": {
+      "main": [
+        [
+          {
+            "node": "Any Shift Affected?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Shift Affected?": {
+      "main": [
+        [
+          {
+            "node": "Shape Absence Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply - No Shift Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Absence Row": {
+      "main": [
+        [
+          {
+            "node": "Log Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Absence": {
+      "main": [
+        [
+          {
+            "node": "Get Candidate Staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Candidate Staff": {
+      "main": [
+        [
+          {
+            "node": "Get Availability (Date)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Availability (Date)": {
+      "main": [
+        [
+          {
+            "node": "Get Assignments (Date)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Assignments (Date)": {
+      "main": [
+        [
+          {
+            "node": "Replacement Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replacement Engine": {
+      "main": [
+        [
+          {
+            "node": "Replacement Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replacement Found?": {
+      "main": [
+        [
+          {
+            "node": "Shape Replacement Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Groq - Escalation Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Replacement Row": {
+      "main": [
+        [
+          {
+            "node": "Create Replacement Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Replacement Assignment": {
+      "main": [
+        [
+          {
+            "node": "Shape Original As Replaced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Original As Replaced": {
+      "main": [
+        [
+          {
+            "node": "Mark Original Replaced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Original Replaced": {
+      "main": [
+        [
+          {
+            "node": "Shape Notify Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Notify Payload": {
+      "main": [
+        [
+          {
+            "node": "Call Workflow C (Notify)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Workflow C (Notify)": {
+      "main": [
+        [
+          {
+            "node": "Shape Audit - Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Escalation Draft": {
+      "main": [
+        [
+          {
+            "node": "Escalation + Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation + Fallback": {
+      "main": [
+        [
+          {
+            "node": "Escalate to Scheduler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate to Scheduler": {
+      "main": [
+        [
+          {
+            "node": "Shape Audit - Absence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Audit - Absence": {
+      "main": [
+        [
+          {
+            "node": "Audit - Absence Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "klaiya-poc"
+  },
+  "tags": [
+    {
+      "name": "Klaiya Scheduling"
+    }
+  ]
+}

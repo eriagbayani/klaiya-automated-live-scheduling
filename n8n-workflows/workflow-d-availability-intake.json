@@ -1,0 +1,397 @@
+{
+  "name": "Klaiya D - Availability Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "klaiya-availability",
+        "formTitle": "Klaiya - weekly availability",
+        "formDescription": "Tell us when you can work next week. Write it however you like - plain English is fine.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Your name",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Exactly as it appears on the roster"
+            },
+            {
+              "fieldLabel": "Week starting (Monday)",
+              "fieldType": "date",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "When are you available?",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "placeholder": "e.g. Mon-Wed evenings from 6pm, Thursday all day, not available Friday"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "klaiya-node-301",
+      "name": "Availability Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        400
+      ],
+      "webhookId": "klaiya-availability-form"
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_STAFF_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "={Name} = '{{ $json['Your name'] }}'",
+        "options": {}
+      },
+      "id": "klaiya-node-302",
+      "name": "Find Staff Record",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -240,
+        400
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-302",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-303",
+      "name": "Staff Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -20,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"llama-3.3-70b-versatile\", temperature: 0, response_format: { type: \"json_object\" }, messages: [ { role: \"system\", content: \"You extract work availability from free-text messages by staff at a livestream commerce agency in Manila. Return ONLY a JSON object: {\\\"slots\\\": [{\\\"date\\\": \\\"YYYY-MM-DD\\\", \\\"from\\\": \\\"HH:MM\\\", \\\"to\\\": \\\"HH:MM\\\"}], \\\"confidence\\\": number}. Rules: the user gives you a week-start date which is a Monday - resolve all day names against that week (Monday = week start, Sunday = week start + 6). Use 24-hour zero-padded times. Interpret \\\"evenings\\\" as 18:00-23:00, \\\"afternoons\\\" as 13:00-18:00, \\\"mornings\\\" as 09:00-13:00, \\\"all day\\\" as 09:00-23:00. Include ONLY days the person says they ARE available - never include days they say they cannot work. If a day is not mentioned at all, omit it. confidence is 0.0-1.0 for how clearly the text maps to specific days and times. Return an empty slots array if nothing can be determined.\" }, { role: \"user\", content: \"Week starting (Monday): \" + $('Availability Form').first().json['Week starting (Monday)'] + \"\\nMessage: \" + $('Availability Form').first().json['When are you available?'] } ] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "klaiya-node-304",
+      "name": "Groq - Parse Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CRED_ID",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One Airtable row per available day. Guards against Groq failure or garbage.\nconst r = $input.first().json;\nconst form = $('Availability Form').first().json;\nconst staffRec = $('Find Staff Record').first().json;\n\nlet parsed = null;\ntry { parsed = JSON.parse(r.choices[0].message.content); } catch (e) { parsed = null; }\n\nconst isDate = (s) => typeof s === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(s);\nconst isTime = (s) => typeof s === 'string' && /^([01]\\d|2[0-3]):[0-5]\\d$/.test(s);\n\nconst slots = (parsed && Array.isArray(parsed.slots) ? parsed.slots : [])\n  .filter(s => isDate(s.date) && isTime(s.from) && isTime(s.to))\n  .filter(s => s.from < s.to);\n\nconst confidence = parsed ? Number(parsed.confidence) || 0 : 0;\n\nif (slots.length === 0) {\n  // Nothing usable. Store the raw text so a human can enter it manually -\n  // never silently drop a submission.\n  return [{ json: {\n    'Staff': [staffRec.id],\n    'Date': form['Week starting (Monday)'],\n    'Available From': '',\n    'Available To': '',\n    'Source': 'Manual',\n    'Raw Text': form['When are you available?'],\n    'Needs Review': true,\n    '_parseFailed': true,\n    '_staffName': form['Your name'],\n  }}];\n}\n\nreturn slots.map(s => ({ json: {\n  'Staff': [staffRec.id],\n  'Date': s.date,\n  'Available From': s.from,\n  'Available To': s.to,\n  'Source': 'Parsed',\n  'Raw Text': form['When are you available?'],\n  'Needs Review': confidence < 0.7,\n  '_parseFailed': false,\n  '_staffName': form['Your name'],\n}}));"
+      },
+      "id": "klaiya-node-305",
+      "name": "Expand Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Remove the underscore-prefixed working fields before the Airtable write.\nreturn $input.all().map(i => {\n  const j = Object.assign({}, i.json);\n  delete j._parseFailed;\n  delete j._staffName;\n  return { json: j };\n});"
+      },
+      "id": "klaiya-node-306",
+      "name": "Strip Internal Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AVAILABILITY_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-307",
+      "name": "Create Availability Rows",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        860,
+        300
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $('Expand Slots').all().map(i => i.json);\nconst first = items[0];\nconst failed = first._parseFailed;\nreturn [{ json: {\n  'Action': 'AVAILABILITY_SUBMITTED',\n  'Actor': first._staffName,\n  'Source': 'Automated',\n  'Staff Affected': first['Staff'],\n  'After Value': failed\n    ? 'Parse failed - stored raw for manual entry'\n    : items.map(i => `${i['Date']} ${i['Available From']}-${i['Available To']}`).join(', '),\n  'Reason': 'Weekly availability submission via form',\n}}];"
+      },
+      "id": "klaiya-node-308",
+      "name": "Shape Audit - Availability",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AUDIT_LOG_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-309",
+      "name": "Audit - Availability",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1300,
+        300
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_SCHEDULER_CHAT_ID",
+        "text": "=<b>Availability submission rejected</b>\nNo staff record matches \"{{ $('Availability Form').first().json['Your name'] }}\".\nTheir submission was not saved. Check the name spelling on the roster.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-310",
+      "name": "Warn - Unknown Staff",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        520
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Availability Form": {
+      "main": [
+        [
+          {
+            "node": "Find Staff Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Staff Record": {
+      "main": [
+        [
+          {
+            "node": "Staff Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Staff Exists?": {
+      "main": [
+        [
+          {
+            "node": "Groq - Parse Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Warn - Unknown Staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Parse Availability": {
+      "main": [
+        [
+          {
+            "node": "Expand Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Slots": {
+      "main": [
+        [
+          {
+            "node": "Strip Internal Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strip Internal Fields": {
+      "main": [
+        [
+          {
+            "node": "Create Availability Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Availability Rows": {
+      "main": [
+        [
+          {
+            "node": "Shape Audit - Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Audit - Availability": {
+      "main": [
+        [
+          {
+            "node": "Audit - Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "klaiya-poc"
+  },
+  "tags": [
+    {
+      "name": "Klaiya Scheduling"
+    }
+  ]
+}

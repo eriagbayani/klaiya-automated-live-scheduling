@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+package-lock.json
+
+# Contains this deployment's Airtable base ID, table IDs and a personal Telegram
+# chat ID. The templates in n8n-workflows/ are identical but with placeholders,
+# and are what should be shared.
+n8n-workflows/configured/
+
+# Generated at runtime by Workflow C
+*.ics
+klaiya-schedule.html
+
+# Paste helpers used while debugging live workflows - superseded by the JSON files
+n8n-workflows/PASTE-INTO-*.js
+
+# Local tooling
+.claude/
+.env
+*.log
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

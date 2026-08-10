@@ -1,0 +1,632 @@
+{
+  "name": "Klaiya E - Publish & Change Watcher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "klaiya-node-401",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "=AND({Status} != 'Cancelled', {Session Date Flat} >= '{{ $now.minus({ days: 1 }).toFormat('yyyy-MM-dd') }}')",
+        "options": {}
+      },
+      "id": "klaiya-node-402",
+      "name": "Get Active Assignments",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -240,
+        400
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Diff each Published row against its own stored baseline (\"Logged State\").\n// n8n static data is NOT usable here: it only persists for production runs of an\n// active workflow, and is wiped by a container restart. Airtable is durable and\n// works identically for manual and scheduled runs.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst one = (v) => Array.isArray(v) ? v[0] : v;\nconst rows = $input.all().map(i => REC(i.json)).filter(r => r && r.id);\n\nconst toPublish = [];\nconst changes = [];\nconst stateUpdates = [];   // rows whose baseline needs writing or refreshing\n\nfor (const r of rows) {\n  const f = r.fields || {};\n  const current = {\n    staff:  one(f['Staff Name']) || '',\n    role:   f['Role'] || '',\n    status: f['Status'] || '',\n  };\n  const label = `${one(f['Session Client'])} ${one(f['Session Date'])} ${one(f['Session Start'])}-${one(f['Session End'])}`;\n\n  // approved by a human, not yet sent -> hand to Workflow C\n  if (f['Approved'] && !f['Notified'] && current.status === 'Draft') {\n    toPublish.push(r.id);\n    continue;\n  }\n\n  if (current.status !== 'Published') continue;\n\n  let baseline = null;\n  try { baseline = f['Logged State'] ? JSON.parse(f['Logged State']) : null; } catch (e) { baseline = null; }\n\n  // No baseline yet (published before this feature existed) - seed it, do not\n  // report a phantom change.\n  if (!baseline) {\n    stateUpdates.push({ id: r.id, fields: { 'Logged State': JSON.stringify(current) } });\n    continue;\n  }\n\n  const diffs = [];\n  if (baseline.staff  !== current.staff)  diffs.push({ field: 'Staff',  before: baseline.staff  || '(empty)', after: current.staff  || '(empty)' });\n  if (baseline.role   !== current.role)   diffs.push({ field: 'Role',   before: baseline.role   || '(empty)', after: current.role   || '(empty)' });\n  if (baseline.status !== current.status) diffs.push({ field: 'Status', before: baseline.status || '(empty)', after: current.status || '(empty)' });\n\n  if (!diffs.length) continue;\n\n  const modifiedBy = f['Last Modified By'];\n  changes.push({\n    assignmentId: r.id,\n    staffId: one(f['Staff']) || '',\n    sessionLabel: label,\n    actor: (modifiedBy && (modifiedBy.name || modifiedBy.email)) || 'Unknown (Airtable UI)',\n    reason: f['Change Reason'] || '',\n    diffs,\n    // only a staff or role swap needs the person told; a status flip does not\n    needsRenotify: diffs.some(d => d.field === 'Staff' || d.field === 'Role'),\n  });\n\n  stateUpdates.push({ id: r.id, fields: { 'Logged State': JSON.stringify(current) } });\n}\n\nconst missingReason = changes.filter(c => !c.reason);\n\n// Airtable PATCH accepts 10 records per call\nconst stateChunks = [];\nfor (let i = 0; i < stateUpdates.length; i += 10) stateChunks.push(stateUpdates.slice(i, i + 10));\n\nreturn [{ json: {\n  toPublish,\n  changes,\n  publishCount: toPublish.length,\n  changeCount: changes.length,\n  renotifyIds: changes.filter(c => c.needsRenotify).map(c => c.assignmentId),\n  missingReason,\n  missingReasonCount: missingReason.length,\n  stateChunks,\n  stateUpdateCount: stateUpdates.length,\n}}];"
+      },
+      "id": "klaiya-node-403",
+      "name": "Detect Approvals & Changes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-403",
+              "leftValue": "={{ $json.publishCount }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-404",
+      "name": "Anything To Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $('Detect Approvals & Changes').first().json;\nreturn [{ json: { assignmentIds: d.toPublish, changeType: 'PUBLISH' } }];"
+      },
+      "id": "klaiya-node-405",
+      "name": "Shape Publish Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_C_ID",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "klaiya-node-406",
+      "name": "Call Workflow C - Publish",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-406",
+              "leftValue": "={{ $json.changeCount }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-407",
+      "name": "Any Manual Changes?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One audit row per changed field - \"who changed what, when, why\".\nconst d = $input.first().json;\nconst out = [];\nfor (const c of d.changes) {\n  for (const diff of c.diffs) {\n    out.push({ json: {\n      'Action': 'MANUAL_OVERRIDE',\n      'Actor': c.actor,\n      'Source': 'Manual',\n      'Staff Affected': c.staffId ? [c.staffId] : undefined,\n      'Before Value': `${diff.field}: ${diff.before}`,\n      'After Value': `${diff.field}: ${diff.after}`,\n      'Reason': c.reason || 'NOT PROVIDED - scheduler did not fill in Change Reason',\n    }});\n  }\n}\nreturn out;"
+      },
+      "id": "klaiya-node-408",
+      "name": "Expand Change Audit Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AUDIT_LOG_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-409",
+      "name": "Create Override Audit Rows",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        640,
+        420
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-409",
+              "leftValue": "={{ $('Detect Approvals & Changes').first().json.renotifyIds.length }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-410",
+      "name": "Needs Re-notification?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        860,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $('Detect Approvals & Changes').first().json;\nreturn [{ json: { assignmentIds: d.renotifyIds, changeType: 'CHANGE' } }];"
+      },
+      "id": "klaiya-node-411",
+      "name": "Shape Re-notify Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_WORKFLOW_C_ID",
+          "mode": "id"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "klaiya-node-412",
+      "name": "Call Workflow C - Re-notify",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-412",
+              "leftValue": "={{ $json.missingReasonCount }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-413",
+      "name": "Any Change Missing A Reason?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-413",
+              "leftValue": "={{ $json.stateUpdateCount }}",
+              "rightValue": "=0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "klaiya-node-414",
+      "name": "Any State To Sync?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        780
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// one item per PATCH call (Airtable caps at 10 records)\nreturn $input.first().json.stateChunks.map(chunk => ({ json: { records: chunk } }));"
+      },
+      "id": "klaiya-node-415",
+      "name": "Split State Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        780
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://api.airtable.com/v0/REPLACE_WITH_BASE_ID/REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ records: $json.records, typecast: true }) }}",
+        "options": {}
+      },
+      "id": "klaiya-node-416",
+      "name": "Persist Logged State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        780
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { text: [\n  '<b>Schedule edited without a reason</b>',\n  `${d.missingReasonCount} change(s) were made in Airtable with no Change Reason recorded:`,\n  ...d.missingReason.map(c => `- ${c.sessionLabel} (by ${c.actor})`),\n  '',\n  'These are logged, but the audit trail is incomplete without a reason. Please fill in the Change Reason field.',\n].join('\\n') }}];"
+      },
+      "id": "klaiya-node-417",
+      "name": "Build Reason Warning",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_SCHEDULER_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-418",
+      "name": "Warn - Missing Reason",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        640,
+        600
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Active Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Assignments": {
+      "main": [
+        [
+          {
+            "node": "Detect Approvals & Changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Approvals & Changes": {
+      "main": [
+        [
+          {
+            "node": "Anything To Publish?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Any Manual Changes?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Any Change Missing A Reason?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Any State To Sync?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything To Publish?": {
+      "main": [
+        [
+          {
+            "node": "Shape Publish Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Shape Publish Payload": {
+      "main": [
+        [
+          {
+            "node": "Call Workflow C - Publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Manual Changes?": {
+      "main": [
+        [
+          {
+            "node": "Expand Change Audit Rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Expand Change Audit Rows": {
+      "main": [
+        [
+          {
+            "node": "Create Override Audit Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Override Audit Rows": {
+      "main": [
+        [
+          {
+            "node": "Needs Re-notification?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Re-notification?": {
+      "main": [
+        [
+          {
+            "node": "Shape Re-notify Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Shape Re-notify Payload": {
+      "main": [
+        [
+          {
+            "node": "Call Workflow C - Re-notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Change Missing A Reason?": {
+      "main": [
+        [
+          {
+            "node": "Build Reason Warning",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Reason Warning": {
+      "main": [
+        [
+          {
+            "node": "Warn - Missing Reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any State To Sync?": {
+      "main": [
+        [
+          {
+            "node": "Split State Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split State Chunks": {
+      "main": [
+        [
+          {
+            "node": "Persist Logged State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "klaiya-poc"
+  },
+  "tags": [
+    {
+      "name": "Klaiya Scheduling"
+    }
+  ]
+}

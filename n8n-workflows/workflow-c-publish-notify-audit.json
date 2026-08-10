@@ -1,0 +1,683 @@
+{
+  "name": "Klaiya C - Publish, Notify & Audit",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "klaiya-node-201",
+      "name": "Called by A or B",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Airtable has no \"IN\" operator - build an OR() of RECORD_ID() comparisons.\n// n8n coerces workflow inputs, so assignmentIds can arrive as a real array,\n// a JSON string, or a comma-separated string. Accept all three.\nconst input = $input.first().json;\nconst raw = input.assignmentIds;\n\nlet ids = [];\nif (Array.isArray(raw)) {\n  ids = raw;\n} else if (typeof raw === \"string\") {\n  const t = raw.trim();\n  if (t.startsWith(\"[\")) { try { ids = JSON.parse(t); } catch (e) { ids = []; } }\n  else if (t) { ids = t.split(\",\"); }\n}\nids = ids.map(x => String(x).trim()).filter(x => x.startsWith(\"rec\"));\n\nconst formula = ids.length\n  ? \"OR(\" + ids.map(i => \"RECORD_ID()='\" + i + \"'\").join(\",\") + \")\"\n  : \"RECORD_ID()='none'\";\n\nreturn [{ json: {\n  formula,\n  changeType: input.changeType || \"PUBLISH\",\n  count: ids.length,\n  // diagnostics - makes a bad handoff visible instead of silent\n  receivedType: Array.isArray(raw) ? \"array\" : typeof raw,\n  receivedRaw: JSON.stringify(raw === undefined ? null : raw).slice(0, 200),\n}}];"
+      },
+      "id": "klaiya-node-202",
+      "name": "Build ID Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "filterByFormula": "={{ $json.formula }}",
+        "options": {}
+      },
+      "id": "klaiya-node-203",
+      "name": "Get Assignments",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -20,
+        400
+      ],
+      "executeOnce": false,
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "klaiya-node-204",
+      "name": "Loop Over Assignments (batch 1)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Batch size is 1, so this sees exactly one assignment per pass.\n// Contact routing comes off the Assignment row via Lookup fields - no extra Staff fetch.\nconst one = (v) => Array.isArray(v) ? v[0] : v;\n// The Airtable node returns either { id, fields:{...} } or a flattened\n// { id, ...fieldValues } depending on node version. Normalise both shapes.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst r = REC($input.first().json);\nconst f = r.fields;\nreturn [{ json: {\n  assignmentId: r.id,\n  staffId:   one(f['Staff']),\n  staffName: one(f['Staff Name']),\n  role:      f['Role'],\n  client:    one(f['Session Client']),\n  date:      one(f['Session Date']),\n  startTime: one(f['Session Start']),\n  endTime:   one(f['Session End']),\n  // routing - these are Lookup fields on Assignments (see schema guide section 6)\n  notifyChannel:   one(f['Staff Notify Channel']) || 'Email',\n  telegramChatId:  one(f['Staff Telegram Chat ID']) || '',\n  slackMemberId:   one(f['Staff Slack Member ID']) || '',\n  email:           one(f['Staff Email']) || '',\n  changeType: $('Build ID Filter').first().json.changeType,\n}}];"
+      },
+      "id": "klaiya-node-205",
+      "name": "Prepare Message Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"llama-3.3-70b-versatile\", temperature: 0.4, messages: [ { role: \"system\", content: \"You write short shift notifications for Klaiya, a Manila livestream commerce agency. Tone: warm, professional, direct. 2-3 sentences maximum. At most one emoji. Always include the date, start-end time, client brand, and their role. If the change type is CHANGE, lead with the fact that this is a change to a previously sent schedule. Output plain text only - no markdown, no preamble, no sign-off block.\" }, { role: \"user\", content: \"Staff: \" + $json.staffName + \"\\nRole: \" + $json.role + \"\\nClient: \" + $json.client + \"\\nDate: \" + $json.date + \"\\nTime: \" + $json.startTime + \"-\" + $json.endTime + \"\\nChange type: \" + $json.changeType } ] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "klaiya-node-206",
+      "name": "Groq - Draft Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        500
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CRED_ID",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst d = $('Prepare Message Context').first().json;\n\nlet text;\nlet source = 'groq';\nif (r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) {\n  text = r.choices[0].message.content;\n} else {\n  source = 'fallback';\n  const lead = d.changeType === 'CHANGE'\n    ? 'Schedule change: '\n    : 'Schedule published: ';\n  text = `${lead}you are assigned as ${d.role} for ${d.client} on ${d.date}, ${d.startTime}-${d.endTime}. Please confirm in the group chat.`;\n}\n\nreturn [{ json: Object.assign({}, d, { text, messageSource: source }) }];"
+      },
+      "id": "klaiya-node-207",
+      "name": "Message + Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.notifyChannel }}",
+                    "rightValue": "Telegram",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Telegram"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.notifyChannel }}",
+                    "rightValue": "Slack",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Slack"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Email"
+        }
+      },
+      "id": "klaiya-node-208",
+      "name": "Route by Notify Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegramChatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "klaiya-node-209",
+      "name": "Send via Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        340
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CRED_ID",
+          "name": "Klaiya Scheduler Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "={{ $json.slackMemberId }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "klaiya-node-210",
+      "name": "Send via Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        500
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_SLACK_CRED_ID",
+          "name": "Klaiya Slack"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "scheduling@klaiya.example",
+        "toEmail": "={{ $json.email }}",
+        "subject": "=Your Klaiya shift - {{ $json.date }}",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "klaiya-node-211",
+      "name": "Send via Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1300,
+        660
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_SMTP_CRED_ID",
+          "name": "Klaiya SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Reach back by node name: this node's INPUT is the Telegram/Slack/Email\n// response, which does not carry the assignment context.\nconst d = $('Message + Fallback').first().json;\nreturn [{ json: {\n  id: d.assignmentId,\n  fields: {\n    'Status': 'Published',\n    'Notified': true,\n    // baseline for Workflow E's change detection\n    'Logged State': JSON.stringify({ staff: d.staffName, role: d.role, status: 'Published' }),\n  },\n}}];"
+      },
+      "id": "klaiya-node-212",
+      "name": "Shape Publish Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://api.airtable.com/v0/REPLACE_WITH_BASE_ID/REPLACE_WITH_ASSIGNMENTS_TABLE_ID",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "airtableTokenApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ records: [ { id: $json.id, fields: $json.fields } ], typecast: true }) }}",
+        "options": {}
+      },
+      "id": "klaiya-node-213",
+      "name": "Mark Published + Notified",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        500
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $('Message + Fallback').first().json;\nreturn [{ json: {\n  'Action': d.changeType === 'CHANGE' ? 'ASSIGNMENT_CHANGED' : 'PUBLISHED',\n  'Actor': 'Workflow C',\n  'Source': 'Automated',\n  'Staff Affected': [d.staffId],\n  'After Value': `${d.role} - ${d.client} ${d.date} ${d.startTime}-${d.endTime}`,\n  'Reason': `Notification sent via ${d.notifyChannel || 'Email'} (message source: ${d.messageSource})`,\n}}];"
+      },
+      "id": "klaiya-node-214",
+      "name": "Shape Audit - Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "airtableTokenApi",
+        "resource": "record",
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "REPLACE_WITH_BASE_ID",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "REPLACE_WITH_AUDIT_LOG_TABLE_ID",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "klaiya-node-215",
+      "name": "Audit - Notification Sent",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        2180,
+        500
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_WITH_AIRTABLE_CRED_ID",
+          "name": "Klaiya Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 0.25,
+        "unit": "seconds"
+      },
+      "id": "klaiya-node-216",
+      "name": "Rate Limit Wait (250ms)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        500
+      ],
+      "webhookId": "klaiya-wait-webhook"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Runs once after the loop finishes. Produces a printable schedule table.\n// The Airtable node returns either { id, fields:{...} } or a flattened\n// { id, ...fieldValues } depending on node version. Normalise both shapes.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst rows = $('Get Assignments').all().map(i => REC(i.json)).filter(r => r && r.id);\nconst one = (v) => Array.isArray(v) ? v[0] : v;\n\nconst byDate = {};\nfor (const r of rows) {\n  const d = one(r.fields['Session Date']) || 'Undated';\n  (byDate[d] = byDate[d] || []).push({\n    time:   `${one(r.fields['Session Start'])}-${one(r.fields['Session End'])}`,\n    client: one(r.fields['Session Client']),\n    role:   r.fields['Role'],\n    staff:  one(r.fields['Staff Name']),\n  });\n}\n\nlet html = `<html><head><meta charset=\"utf-8\"><style>\nbody{font-family:system-ui,sans-serif;margin:32px;color:#111}\nh1{font-size:20px;margin-bottom:4px}\n.sub{color:#666;font-size:12px;margin-bottom:24px}\nh2{font-size:14px;margin:20px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}\ntable{border-collapse:collapse;width:100%;font-size:13px}\ntd,th{text-align:left;padding:6px 10px;border-bottom:1px solid #eee}\nth{background:#fafafa;font-weight:600}\n</style></head><body>\n<h1>Klaiya Live Schedule</h1>\n<div class=\"sub\">Generated ${new Date(Date.now() + 8*3600000).toISOString().slice(0,16).replace('T',' ')} PHT &middot; ${rows.length} assignments</div>`;\n\nfor (const date of Object.keys(byDate).sort()) {\n  html += `<h2>${date}</h2><table><tr><th>Time</th><th>Client</th><th>Role</th><th>Staff</th></tr>`;\n  for (const r of byDate[date].sort((a, b) => a.time.localeCompare(b.time))) {\n    html += `<tr><td>${r.time}</td><td>${r.client}</td><td>${r.role}</td><td>${r.staff}</td></tr>`;\n  }\n  html += '</table>';\n}\nhtml += '</body></html>';\n\n// convertToFile base64-DECODES its source property, so hand it base64.\nreturn [{ json: {\n  html: Buffer.from(html, \"utf8\").toString(\"base64\"),\n  assignmentCount: rows.length,\n} }];"
+      },
+      "id": "klaiya-node-217",
+      "name": "Build Schedule Export (HTML)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "html",
+        "options": {
+          "fileName": "klaiya-schedule.html",
+          "mimeType": "text/html"
+        }
+      },
+      "id": "klaiya-node-218",
+      "name": "Schedule File (HTML)",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        640,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// RFC 5545 calendar feed - importable into Google Calendar,\n// Outlook or Apple Calendar. Closes the \"calendar sync\" half of requirement 8.\n// The Airtable node returns either { id, fields:{...} } or a flattened\n// { id, ...fieldValues } depending on node version. Normalise both shapes.\nconst REC = (j) => (j && j.fields) ? j : { id: j && j.id, fields: j || {} };\nconst rows = $('Get Assignments').all().map(i => REC(i.json)).filter(r => r && r.id);\nconst one = (v) => Array.isArray(v) ? v[0] : v;\n\nconst stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';\nconst fold = (s) => String(s).replace(/([,;\\\\])/g, '\\\\$1').replace(/\\n/g, '\\\\n');\n\nconst lines = [\n  'BEGIN:VCALENDAR',\n  'VERSION:2.0',\n  'PRODID:-//Klaiya Digital Solution//Live Scheduling//EN',\n  'CALSCALE:GREGORIAN',\n  'METHOD:PUBLISH',\n  'X-WR-CALNAME:Klaiya Live Schedule',\n  'X-WR-TIMEZONE:Asia/Manila',\n  'BEGIN:VTIMEZONE',\n  'TZID:Asia/Manila',\n  'BEGIN:STANDARD',\n  'DTSTART:19700101T000000',\n  'TZOFFSETFROM:+0800',\n  'TZOFFSETTO:+0800',\n  'TZNAME:PST',\n  'END:STANDARD',\n  'END:VTIMEZONE',\n];\n\nfor (const r of rows) {\n  const f = r.fields || {};\n  const date = one(f['Session Date']);\n  const start = one(f['Session Start']);\n  const end = one(f['Session End']);\n  if (!date || !start || !end) continue;\n\n  const d = String(date).replace(/-/g, '');\n  const t = (hhmm) => String(hhmm).replace(':', '') + '00';\n\n  lines.push(\n    'BEGIN:VEVENT',\n    `UID:${r.id}@klaiya-scheduling`,\n    `DTSTAMP:${stamp}`,\n    `DTSTART;TZID=Asia/Manila:${d}T${t(start)}`,\n    `DTEND;TZID=Asia/Manila:${d}T${t(end)}`,\n    `SUMMARY:${fold(one(f['Session Client']) + ' - ' + f['Role'])}`,\n    `DESCRIPTION:${fold('Staff: ' + one(f['Staff Name']) + '\\nRole: ' + f['Role'] + '\\nClient: ' + one(f['Session Client']))}`,\n    `STATUS:${f['Status'] === 'Cancelled' ? 'CANCELLED' : 'CONFIRMED'}`,\n    'BEGIN:VALARM',\n    'TRIGGER:-PT60M',\n    'ACTION:DISPLAY',\n    'DESCRIPTION:Livestream session in 1 hour',\n    'END:VALARM',\n    'END:VEVENT',\n  );\n}\n\nlines.push('END:VCALENDAR');\n\n// convertToFile base64-DECODES its source property, so hand it base64.\nreturn [{ json: {\n  ics: Buffer.from(lines.join('\\r\\n'), \"utf8\").toString(\"base64\"),\n  eventCount: rows.length,\n} }];"
+      },
+      "id": "klaiya-node-219",
+      "name": "Build Calendar Export (ICS)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "ics",
+        "options": {
+          "fileName": "klaiya-schedule.ics",
+          "mimeType": "text/calendar"
+        }
+      },
+      "id": "klaiya-node-220",
+      "name": "Calendar File (ICS)",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        640,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Called by A or B": {
+      "main": [
+        [
+          {
+            "node": "Build ID Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build ID Filter": {
+      "main": [
+        [
+          {
+            "node": "Get Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Assignments": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Assignments (batch 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Assignments (batch 1)": {
+      "main": [
+        [
+          {
+            "node": "Build Schedule Export (HTML)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Calendar Export (ICS)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Message Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Calendar Export (ICS)": {
+      "main": [
+        [
+          {
+            "node": "Calendar File (ICS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Message Context": {
+      "main": [
+        [
+          {
+            "node": "Groq - Draft Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Draft Notification": {
+      "main": [
+        [
+          {
+            "node": "Message + Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message + Fallback": {
+      "main": [
+        [
+          {
+            "node": "Route by Notify Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Notify Channel": {
+      "main": [
+        [
+          {
+            "node": "Send via Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send via Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send via Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Telegram": {
+      "main": [
+        [
+          {
+            "node": "Shape Publish Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Slack": {
+      "main": [
+        [
+          {
+            "node": "Shape Publish Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Email": {
+      "main": [
+        [
+          {
+            "node": "Shape Publish Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Publish Update": {
+      "main": [
+        [
+          {
+            "node": "Mark Published + Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Published + Notified": {
+      "main": [
+        [
+          {
+            "node": "Shape Audit - Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Audit - Notification": {
+      "main": [
+        [
+          {
+            "node": "Audit - Notification Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit - Notification Sent": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Wait (250ms)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Wait (250ms)": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Assignments (batch 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Schedule Export (HTML)": {
+      "main": [
+        [
+          {
+            "node": "Schedule File (HTML)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "klaiya-poc"
+  },
+  "tags": [
+    {
+      "name": "Klaiya Scheduling"
+    }
+  ]
+}
