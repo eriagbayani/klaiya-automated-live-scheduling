@@ -14,6 +14,12 @@ klaiya-schedule.html
 # Paste helpers used while debugging live workflows - superseded by the JSON files
 n8n-workflows/PASTE-INTO-*.js
 
+# Submission artifacts and presentation material - kept locally, not published
+deck/
+submission/
+STATUS.md
+*.pdf
+
 # Local tooling
 .claude/
 .env

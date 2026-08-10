@@ -55,11 +55,8 @@ blocking a schedule.
 | `02-solution-design.md` | Full technical design — engine source, prompts, node-by-node breakdown |
 | `03-airtable-schema.md` | Table-by-table schema reference |
 | `04-setup-and-deployment.md` | Setup, testing order, troubleshooting |
-| `STATUS.md` | Build status and known gotchas |
 | `airtable-setup/` | Scripts to create, verify, seed and health-check the Airtable base |
 | `n8n-workflows/` | The five workflow JSON files plus the offline test suite |
-| `submission/` | The submission document |
-| `deck/` | Pitch deck and presenter script |
 
 > The workflow JSON files use `REPLACE_WITH_*` placeholders for base, table and credential IDs.
 > `airtable-setup/configure-workflows.js` fills them from your own live base.
